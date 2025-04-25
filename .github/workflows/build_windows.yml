@@ -1,0 +1,84 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        architecture: 'x64'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+      
+    - name: Build with PyInstaller
+      shell: pwsh
+      run: |
+        if (Test-Path "build") { Remove-Item -Path "build" -Recurse -Force }
+        pyinstaller --name=WordParser --onefile --windowed --add-data="word_parser.py;." main.py    
+    - name: Create Release Directory
+      shell: pwsh
+      run: |
+        if (Test-Path "release") { Remove-Item -Path "release" -Recurse -Force }
+        New-Item -Path "release" -ItemType Directory -Force
+        Copy-Item "dist\WordParser.exe" -Destination "release\" -ErrorAction SilentlyContinue
+        if (-not (Test-Path "release\WordParser.exe")) {
+          Write-Error "Failed to create release package: WordParser.exe not found"
+          exit 1
+        }
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: WordParser-windows
+        path: release\
+        if-no-files-found: error
+        compression-level: 9
+        retention-days: 90
+    
+    - name: Check Tag
+      id: check-tag
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: pwsh
+      run: |
+        Write-Output "Running release for tag $($env:GITHUB_REF -replace 'refs/tags/')"
+        "tag=$($env:GITHUB_REF -replace 'refs/tags/')" >> $env:GITHUB_OUTPUT
+    
+    - name: Delete existing release
+      if: steps.check-tag.outputs.tag != ''
+      uses: dev-drprasad/delete-tag-and-release@v1.0
+      with:
+        tag_name: ${{ steps.check-tag.outputs.tag }}
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        delete_release: true
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: steps.check-tag.outputs.tag != ''
+      with:
+        tag_name: ${{ steps.check-tag.outputs.tag }}
+        name: Release ${{ steps.check-tag.outputs.tag }}
+        files: |
+          release\WordParser.exe
+        draft: false
+        prerelease: false
+        fail_on_unmatched_files: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
